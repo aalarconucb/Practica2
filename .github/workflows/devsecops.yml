@@ -93,7 +93,7 @@ jobs:
         cd backend/api-gateway
         semgrep --config=auto --severity=ERROR
     
-        
+
     - name: Validate env files
       run: |
         ls -la backend/users-service
@@ -149,4 +149,4 @@ jobs:
 
     - name: Shutdown services
       if: always()
-      run: docker compose -f backend/docker-compose.yml down
+      run: docker compose -f backend/docker-compose.yml down || true
