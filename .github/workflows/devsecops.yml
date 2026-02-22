@@ -133,11 +133,6 @@ jobs:
           set -euo pipefail
           cd backend/users-service
           
-          echo "Reinstalling production dependencies only for audit..."
-          rm -rf node_modules
-          npm ci --omit=dev
-
-          echo "Running: npm audit --audit-level=high --omit=dev"
           npm audit --audit-level=high --omit=dev
 
       - name: SCA academic-service (npm audit)
