@@ -1,30 +1,38 @@
-name: DevSecOps CI Pipeline
+name: DevSecOps CI/CD Pipeline
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   devsecops:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      # =========================
+      # 1) Checkout
+      # =========================
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js (LTS)
+      # =========================
+      # 2) Setup Node + Python (Semgrep)
+      # =========================
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-      # ----------------------------
-      # Prepare env files (NO secrets)
-      # ----------------------------
+      # =========================
+      # 3) Create env files (NO secrets)
+      # =========================
       - name: Create env files for Docker Compose
         shell: bash
         run: |
@@ -35,16 +43,16 @@ jobs:
           cp backend/api-gateway/.env.example backend/api-gateway/.env
           cp frontend/.env.example frontend/.env
 
-          # Point gateway to internal docker-compose service names
+          # Gateway -> internal compose DNS
           echo "USERS_SERVICE_URL=http://users-service:3001" >> backend/api-gateway/.env
           echo "ACADEMIC_SERVICE_URL=http://academic-service:3002" >> backend/api-gateway/.env
 
-          # Frontend should call gateway (compose service name)
+          # Frontend -> gateway
           echo "VITE_API_URL=http://api-gateway:3000" >> frontend/.env
 
-      # ----------------------------
-      # Install (reproducible), Quality, Tests
-      # ----------------------------
+      # =========================
+      # 4) Install + Lint + Tests
+      # =========================
       - name: Install & Test users-service
         shell: bash
         run: |
@@ -78,44 +86,47 @@ jobs:
           npm run lint
           npm test
 
-      # ----------------------------
-      # SAST (Semgrep) - Backend + Frontend
-      # ----------------------------
+      # =========================
+      # 5) SAST - Semgrep (CLI)  ✅ (sin workdir)
+      # =========================
+      - name: Install Semgrep
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install semgrep
+
       - name: SAST users-service (Semgrep)
-        uses: semgrep/semgrep-action@v1
-        with:
-          workdir: backend/users-service
-          config: auto
-        env:
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd backend/users-service
+          semgrep --config=auto --severity=ERROR
 
       - name: SAST academic-service (Semgrep)
-        uses: semgrep/semgrep-action@v1
-        with:
-          workdir: backend/academic-service
-          config: auto
-        env:
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd backend/academic-service
+          semgrep --config=auto --severity=ERROR
 
       - name: SAST api-gateway (Semgrep)
-        uses: semgrep/semgrep-action@v1
-        with:
-          workdir: backend/api-gateway
-          config: auto
-        env:
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd backend/api-gateway
+          semgrep --config=auto --severity=ERROR
 
       - name: SAST frontend (Semgrep)
-        uses: semgrep/semgrep-action@v1
-        with:
-          workdir: frontend
-          config: auto
-        env:
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd frontend
+          semgrep --config=auto --severity=ERROR
 
-      # ----------------------------
-      # SCA (Dependencies) - npm audit as a gate
-      # ----------------------------
+      # =========================
+      # 6) SCA - npm audit (gate HIGH/CRITICAL)
+      # =========================
       - name: SCA users-service (npm audit)
         shell: bash
         run: |
@@ -144,9 +155,9 @@ jobs:
           cd frontend
           npm audit --audit-level=high
 
-      # ----------------------------
-      # Build containers + version tag (SHA)
-      # ----------------------------
+      # =========================
+      # 7) Build Docker images (Compose)
+      # =========================
       - name: Build Docker images (docker compose)
         shell: bash
         run: |
@@ -154,7 +165,9 @@ jobs:
           cd backend
           docker compose build
 
-      - name: Tag images with commit SHA (artifact versioning)
+      # (Opcional) Tag con SHA si tus imágenes existen con esos nombres.
+      # Si tu compose define "image: users-service", esto funcionará.
+      - name: Tag images with commit SHA (versioning)
         shell: bash
         run: |
           set -euo pipefail
@@ -163,9 +176,9 @@ jobs:
           docker tag academic-service academic-service:${SHA}
           docker tag api-gateway api-gateway:${SHA}
 
-      # ----------------------------
-      # Container image security scan (Trivy) - HIGH/CRITICAL gate
-      # ----------------------------
+      # =========================
+      # 8) Container Scan - Trivy (gate HIGH/CRITICAL)
+      # =========================
       - name: Trivy scan users-service
         uses: aquasecurity/trivy-action@master
         with:
@@ -196,9 +209,9 @@ jobs:
           vuln-type: "os,library"
           severity: "HIGH,CRITICAL"
 
-      # ----------------------------
-      # Run stack + Smoke tests (health + login + protected endpoint)
-      # ----------------------------
+      # =========================
+      # 9) Run stack + Smoke tests
+      # =========================
       - name: Start containers (docker compose up)
         shell: bash
         run: |
@@ -206,18 +219,17 @@ jobs:
           cd backend
           docker compose up -d
 
-      - name: Smoke test (health + auth + protected resource)
+      - name: Smoke test (health + auth + protected endpoint)
         shell: bash
         run: |
           set -euo pipefail
-
           sudo apt-get update -y
           sudo apt-get install -y jq
 
           # Health
-          curl -fsS http://localhost:3000/health | tee /tmp/health.json
+          curl -fsS http://localhost:3000/health
 
-          # Login (via gateway)
+          # Login (gateway)
           TOKEN=$(curl -fsS -X POST http://localhost:3000/auth/login \
             -H "Content-Type: application/json" \
             -d '{"email":"admin@test.cl","password":"123456"}' | jq -r '.token')
@@ -227,9 +239,9 @@ jobs:
             exit 1
           fi
 
-          # Protected endpoint (via gateway)
+          # Protected resource
           curl -fsS http://localhost:3000/courses \
-            -H "Authorization: Bearer $TOKEN" | tee /tmp/courses.json
+            -H "Authorization: Bearer $TOKEN"
 
       - name: Cleanup (docker compose down)
         if: always()
