@@ -187,7 +187,7 @@ jobs:
         run: |
           set -euo pipefail
           cd backend
-          docker compose build
+          docker compose build --no-cache
 
       # (Opcional) Tag con SHA si tus imágenes existen con esos nombres.
       # Si tu compose define "image: users-service", esto funcionará.
